@@ -1,0 +1,170 @@
+// ============================================
+// Catalog Service - Prisma Schema (CQRS)
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client-catalog"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CATALOG_SYNC_DB_URL") // or CATALOG_SEARCH_DB_URL
+}
+
+// ============================================
+// CATALOG MANAGEMENT
+// ============================================
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  status      String   @default("active") // active, inactive, archived
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  skus         Sku[]
+  categoryId   String?
+  category     Category?     @relation(fields: [categoryId], references: [id])
+  syncJobId    String?
+  syncJob      SyncJob?      @relation(fields: [syncJobId], references: [id])
+
+  @@map("products")
+  @@schema("catalog_schema")
+}
+
+model Sku {
+  id        String   @id @default(uuid())
+  productId String
+  code      String   @unique
+  barcode   String?  @unique
+  name      String
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  product  Product    @relation(fields: [productId], references: [id])
+  images   SkuImage[]
+  prices   SkuPrice[]
+  stocks   SkuStock[]
+
+  @@map("skus")
+  @@schema("catalog_schema")
+}
+
+model SkuImage {
+  id        String   @id @default(uuid())
+  skuId     String
+  url       String
+  altText   String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  // Relations
+  sku Sku @relation(fields: [skuId], references: [id])
+
+  @@map("sku_images")
+  @@schema("catalog_schema")
+}
+
+model SkuPrice {
+  id          String   @id @default(uuid())
+  skuId       String
+  priceListId String
+  price       Decimal  @db.Decimal(10, 2)
+  validFrom   DateTime @default(now())
+  validTo     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  sku       Sku       @relation(fields: [skuId], references: [id])
+  priceList PriceList @relation(fields: [priceListId], references: [id])
+
+  @@map("sku_prices")
+  @@schema("catalog_schema")
+}
+
+model SkuStock {
+  id          String   @id @default(uuid())
+  skuId       String
+  warehouseId String
+  quantity    Int      @default(0)
+  reserved    Int      @default(0)
+  available   Int      @default(0) // quantity - reserved
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  sku       Sku       @relation(fields: [skuId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([skuId, warehouseId])
+  @@map("sku_stocks")
+  @@schema("catalog_schema")
+}
+
+model Warehouse {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  stocks SkuStock[]
+
+  @@map("warehouses")
+  @@schema("catalog_schema")
+}
+
+model PriceList {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  prices SkuPrice[]
+
+  @@map("price_lists")
+  @@schema("catalog_schema")
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String
+  parentId  String?
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryHierarchy")
+  products Product[]
+
+  @@map("categories")
+  @@schema("catalog_schema")
+}
+
+model SyncJob {
+  id          String   @id @default(uuid())
+  source      String // ERP name or source system
+  status      String   @default("pending") // pending, running, completed, failed
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  errorLog    String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  products Product[]
+
+  @@map("sync_jobs")
+  @@schema("catalog_schema")
+}

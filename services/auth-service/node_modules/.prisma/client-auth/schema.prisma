@@ -1,0 +1,146 @@
+// ============================================
+// Auth Service - Prisma Schema
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client-auth"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("AUTH_DB_URL")
+  schemas  = ["auth_schema"]
+}
+
+// ============================================
+// AUTHENTICATION & AUTHORIZATION
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  status    String   @default("active") // active, inactive, blocked
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  userUnits    UserUnit[]
+  userProfiles UserProfile[]
+
+  @@map("users")
+  @@schema("auth_schema")
+}
+
+model Tenant {
+  id           String   @id @default(uuid())
+  name         String
+  documentType String // CPF, CNPJ
+  document     String   @unique
+  email        String
+  phone        String?
+  status       String   @default("active") // active, inactive, suspended
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  units Unit[]
+
+  @@map("tenants")
+  @@schema("auth_schema")
+}
+
+model Unit {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  code      String   @unique
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  userUnits UserUnit[]
+
+  @@map("units")
+  @@schema("auth_schema")
+}
+
+model UserUnit {
+  id        String   @id @default(uuid())
+  userId    String
+  unitId    String
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+  unit Unit @relation(fields: [unitId], references: [id])
+
+  @@unique([userId, unitId])
+  @@map("user_units")
+  @@schema("auth_schema")
+}
+
+model Action {
+  id          String   @id @default(uuid())
+  verb        String // GET, POST, PUT, DELETE, PATCH
+  route       String // /products, /orders/:id
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  profileActions ProfileAction[]
+
+  @@unique([verb, route])
+  @@map("actions")
+  @@schema("auth_schema")
+}
+
+model Profile {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  profileActions ProfileAction[]
+  userProfiles   UserProfile[]
+
+  @@map("profiles")
+  @@schema("auth_schema")
+}
+
+model ProfileAction {
+  id        String   @id @default(uuid())
+  profileId String
+  actionId  String
+  createdAt DateTime @default(now())
+
+  // Relations
+  profile Profile @relation(fields: [profileId], references: [id])
+  action  Action  @relation(fields: [actionId], references: [id])
+
+  @@unique([profileId, actionId])
+  @@map("profile_actions")
+  @@schema("auth_schema")
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String
+  profileId String
+  createdAt DateTime @default(now())
+
+  // Relations
+  user    User    @relation(fields: [userId], references: [id])
+  profile Profile @relation(fields: [profileId], references: [id])
+
+  @@unique([userId, profileId])
+  @@map("user_profiles")
+  @@schema("auth_schema")
+}

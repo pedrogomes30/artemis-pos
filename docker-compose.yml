@@ -1,0 +1,213 @@
+
+name: artemis-pos-microservices
+
+services:
+  postgres:
+    container_name: artemis-postgres
+    image: postgres:17.0-alpine3.20
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-artemis_pos}
+      # Auth Service
+      AUTH_DB_USER: ${AUTH_DB_USER:-auth_user}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-auth_pass_secure_2025}
+      AUTH_DB_SCHEMA: ${AUTH_DB_SCHEMA:-auth_schema}
+      # Catalog Service
+      CATALOG_DB_USER: ${CATALOG_DB_USER:-catalog_user}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:-catalog_pass_secure_2025}
+      CATALOG_DB_SCHEMA: ${CATALOG_DB_SCHEMA:-catalog_schema}
+      # Order Service
+      ORDER_DB_USER: ${ORDER_DB_USER:-order_user}
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:-order_pass_secure_2025}
+      ORDER_DB_SCHEMA: ${ORDER_DB_SCHEMA:-order_schema}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    networks:
+      - artemis-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d artemis_pos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    container_name: artemis-redis
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - artemis-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # own services
+  auth-service:
+    container_name: artemis-auth-service
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    command: sh -c "npx prisma generate && npm run start:dev"
+    environment:
+      - NODE_ENV=development
+      - PORT=3101
+      - AUTH_DB_URL=${AUTH_DB_URL}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-6h}
+    ports:
+      - "3101:3101"
+    volumes:
+      - ./services/auth-service:/app
+      - /app/node_modules
+    networks:
+      - artemis-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  catalog-sync-service:
+    container_name: artemis-catalog-sync-service
+    build:
+      context: ./services/catalog-sync-service
+      dockerfile: Dockerfile
+    command: sh -c "npx prisma generate && npm run start:dev"
+    environment:
+      - NODE_ENV=development
+      - PORT=3102
+      - CATALOG_SYNC_DB_URL=${CATALOG_SYNC_DB_URL}
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:3101
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "3102:3102"
+    volumes:
+      - ./services/catalog-sync-service:/app
+      - /app/node_modules
+    networks:
+      - artemis-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  catalog-search-service:
+    container_name: artemis-catalog-search-service
+    build:
+      context: ./services/catalog-search-service
+      dockerfile: Dockerfile
+    command: sh -c "npx prisma generate && npm run start:dev"
+    environment:
+      - NODE_ENV=development
+      - PORT=3103
+      - CATALOG_SEARCH_DB_URL=${CATALOG_SEARCH_DB_URL}
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:3101
+      - CACHE_TTL=${CATALOG_CACHE_TTL:-300}
+    ports:
+      - "3103:3103"
+    volumes:
+      - ./services/catalog-search-service:/app
+      - /app/node_modules
+    networks:
+      - artemis-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+    restart: unless-stopped
+
+  order-service:
+    container_name: artemis-order-service
+    build:
+      context: ./services/order-service
+      dockerfile: Dockerfile
+    command: sh -c "npx prisma generate && npm run start:dev"
+    environment:
+      - NODE_ENV=development
+      - PORT=3104
+      - ORDER_DB_URL=${ORDER_DB_URL}
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:3101
+      - CATALOG_SEARCH_SERVICE_URL=http://catalog-search-service:3103
+    ports:
+      - "3104:3104"
+    volumes:
+      - ./services/order-service:/app
+      - /app/node_modules
+    networks:
+      - artemis-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      catalog-search-service:
+        condition: service_started
+    restart: unless-stopped
+
+  bff-web:
+    container_name: artemis-bff-web
+    build:
+      context: ./services/bff-web
+      dockerfile: Dockerfile
+    command: npm run start:dev
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:3101
+      - CATALOG_SYNC_SERVICE_URL=http://catalog-sync-service:3102
+      - CATALOG_SEARCH_SERVICE_URL=http://catalog-search-service:3103
+      - ORDER_SERVICE_URL=http://order-service:3104
+      - CORS_ORIGIN=${WEB_CORS_ORIGIN:-http://localhost:3000}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./services/bff-web:/app
+      - /app/node_modules
+    networks:
+      - artemis-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      catalog-sync-service:
+        condition: service_started
+      catalog-search-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  artemis-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
